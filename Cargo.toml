@@ -1,5 +1,5 @@
 [package]
-name = "Coords"
+name = "coords"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,3 +10,9 @@ nav-types = "0.5.2"
 rand = "0.8.5"
 hex = "0.4.3"
 itertools = "0.12.1"
+polars = "0.46.0"
+clap = { version = "4.5.32", features = ["derive"] }
+bytemuck = "1.22.0"
+lazy_static = "1.5.0"
+dashmap = "6.1.0"
+rayon = "1.10.0"

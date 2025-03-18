@@ -1,91 +1,65 @@
+pub mod saveandload;
 extern crate nav_types;
 
+use clap::Parser;
+use core::f32;
+use dashmap::DashMap;
 use hex;
-use itertools::Itertools;
-use nav_types::{ENU, WGS84};
-use rand::Rng;
+use lazy_static::lazy_static;
+use nav_types::WGS84;
+use std::fs;
+use std::time::Instant;
 
-fn generate_coordinate_for_distance(origin: WGS84<f32>, distance: i32) -> WGS84<f32> {
-    fn generate_coordinate(origin: WGS84<f32>, distance: i32) -> WGS84<f32> {
-        let mut rng = rand::thread_rng();
-        let angle = rng.gen_range(0.0..2.0 * std::f32::consts::PI); // Generate random angle
-
-        // Calculate x and y directly from angle and distance
-        let x = distance as f32 * angle.cos();
-        let y = distance as f32 * angle.sin();
-
-        let  vec = ENU::new(x, y, 0.0);
-        origin + vec
-    }
-    let mut new_pos = generate_coordinate(origin, distance);
-    let mut prev = origin.distance(&new_pos).floor();
-    while origin.distance(&new_pos).floor() as i32 != distance{
-        let diff_vec = origin - new_pos;
-        let unit_vec = diff_vec/diff_vec.norm();
-        new_pos +=unit_vec;
-
-         if prev == origin.distance(&new_pos).floor(){
-         new_pos = generate_coordinate(origin, distance);
-         }
-
-        prev = origin.distance(&new_pos).floor();
-
-    }
-
-    new_pos
+lazy_static! {
+    static ref CACHE: DashMap<i32, WGS84<f32>> = DashMap::new();
 }
 
+/// Encode the content of a file into the Coords format, or decode back to original file content
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// The path to the file to read
+    #[arg(short, long)]
+    input_path: std::path::PathBuf,
+    /// The destination path
+    #[arg(short, long)]
+    output_path: std::path::PathBuf,
 
-fn encode(origin:WGS84<f32>,text:&str) -> Vec<WGS84<f32>>{
-    let window_size = 4;
-    let mut coordinates: Vec<WGS84<f32>> = vec![];
-    println!("Encoding text {:?}", text);
+    /// (Optional) Path to coordinate keys stored in a file
+    #[arg(short('C'), long, default_value = None)]
+    coords_path: Option<std::path::PathBuf>,
 
-    for i in (0..(text.len())).step_by(window_size) {
-        let window_size = std::cmp::min(window_size, text.len() - i); // Adjust size for last window
-        let window = text
-            .chars()
-            .skip(i)
-            .take(window_size)
-            .collect::<String>();
+    /// (Optional) Coordinate keys (latitude,longitude, altitude)
+    #[arg(short, long, default_value = None)]
+    coords: Vec<f32>,
 
-        coordinates.push(generate_coordinate_for_distance(
-            origin,i32::from_str_radix(&window, 16).unwrap()
-            ,
-        ))
-    }
-    coordinates
+    /// If to encode, otherwise decode
+    #[arg(short, long, default_value_t = true)]
+    encode: bool,
 }
 
-fn decode(origin: WGS84<f32>,encoded:Vec<WGS84<f32>>) -> String{
-    String::from_utf8(
-        hex::decode(
-            encoded
-                    .iter()
-                    .map(|x| format!("{:x}", origin.distance(x).floor() as i32))
-                    .join(""),
-            )
-            .unwrap(),
-        )
-        .unwrap_or(String::from("Failed to parse, incorrect coordinates!"))
-}
+fn main() -> std::io::Result<()> {
+    let args = Cli::parse();
 
+    let input_contents =
+        fs::read_to_string(args.input_path).expect("Should have been able to read the file");
 
+    let start_time = Instant::now();
+    let origin: WGS84<f32> = WGS84::from_degrees_and_meters(40.6976312, -74.1444842, 0.0);
 
-fn main() {
-    let start: WGS84<f32> = WGS84::from_degrees_and_meters(40.6976312,-74.1444842, 0.0);
+    let text_hex = hex::encode(&input_contents);
+    let encoded = coords::encode(origin, &text_hex);
 
-    let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum";
+    saveandload::save_encoding(&encoded, &args.output_path);
 
-    let text_hex = hex::encode(text);
-
-    let encoded = encode(start,&text_hex);
-
+    let loaded = saveandload::load_encoding(&args.output_path);
     println!("\nRestoring to text");
-    let decoded = decode(start,encoded);
+    let decoded = coords::decode(origin, encoded);
 
-    println!("Restored text:{:?}", decoded);
+    println!("Succeded: {:?}", input_contents == decoded);
+    let duration = start_time.elapsed();
 
-    println!("Succeded: {:?}",text==decoded);
+    println!("Time elapsed in expensive_function() is: {:?}", duration);
 
+    Ok(())
 }
