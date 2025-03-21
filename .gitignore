@@ -1,2 +1,4 @@
 /target
 *.coords
+*.lock
+.DS_Store

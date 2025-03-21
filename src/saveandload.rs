@@ -1,9 +1,9 @@
 extern crate nav_types;
-
+use std::{error::Error, io::BufRead};
+use std::fs::File;
 use core::f32;
 use nav_types::WGS84;
 use polars::prelude::*;
-use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 
 #[allow(dead_code)]
@@ -48,4 +48,23 @@ pub fn load_encoding(filename: &std::path::PathBuf) -> Vec<WGS84<f32>> {
     }
 
     vectors
+}
+
+
+pub fn load_origin_coordinates(filename: &std::path::PathBuf) -> Result<WGS84<f32>, Box<dyn Error>> {
+    let file = File::open(filename).expect("Unable to open file");
+    let mut reader = BufReader::new(file);
+
+    // Read the first (and only) line
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+
+    let values: Vec<f32> = line
+        .trim()
+        .split(',')
+        .map(|s| s.trim().parse::<f32>().expect("Invalid float"))
+        .collect();
+
+    let origin = WGS84::from_degrees_and_meters(values[0], values[1], values[2]);
+    Ok(origin)
 }

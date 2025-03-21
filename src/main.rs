@@ -2,6 +2,7 @@ pub mod saveandload;
 extern crate nav_types;
 
 use clap::Parser;
+use regex::Regex;
 use core::f32;
 use dashmap::DashMap;
 use hex;
@@ -31,7 +32,7 @@ struct Cli {
 
     /// (Optional) Coordinate keys (latitude,longitude, altitude)
     #[arg(short, long, default_value = None)]
-    coords: Vec<f32>,
+    coords: Option<String>,
 
     /// If to encode, otherwise decode
     #[arg(short, long, default_value_t = true)]
@@ -45,7 +46,27 @@ fn main() -> std::io::Result<()> {
         fs::read_to_string(args.input_path).expect("Should have been able to read the file");
 
     let start_time = Instant::now();
-    let origin: WGS84<f32> = WGS84::from_degrees_and_meters(40.6976312, -74.1444842, 0.0);
+
+
+    // Load origin
+    let origin: WGS84<f32>;
+    if args.coords_path.is_some(){
+        origin= saveandload::load_origin_coordinates(&args.coords_path.unwrap()).unwrap();
+    }
+    else if args.coords.is_some() {
+        let re: Regex = Regex::new(r"[\[\]\(\)\{\}]+").unwrap();
+        let coords_string_raw = args.coords.unwrap();
+        let coords_string = Regex::replace_all(&re,&coords_string_raw, "");
+        let coords_vec: Vec<f32> = coords_string
+        .split(',')
+        .map(|s| s.trim().parse::<f32>().expect("Invalid float in --coords"))
+        .collect();
+        origin = WGS84::from_degrees_and_meters(coords_vec[0], coords_vec[1], coords_vec[2])
+    }
+    else {
+        panic!("No origin given!")
+    }
+    
 
     let text_hex = hex::encode(&input_contents);
     let encoded = coords::encode(origin, &text_hex);
@@ -54,7 +75,7 @@ fn main() -> std::io::Result<()> {
 
     let loaded = saveandload::load_encoding(&args.output_path);
     println!("\nRestoring to text");
-    let decoded = coords::decode(origin, encoded);
+    let decoded = coords::decode(origin, loaded);
 
     println!("Succeded: {:?}", input_contents == decoded);
     let duration = start_time.elapsed();
