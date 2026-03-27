@@ -2,18 +2,10 @@ pub mod saveandload;
 extern crate nav_types;
 
 use clap::Parser;
+use coords::log_encoding;
 use regex::Regex;
-use core::f32;
-use dashmap::DashMap;
-use hex;
-use lazy_static::lazy_static;
 use nav_types::WGS84;
 use std::fs;
-use std::time::Instant;
-
-lazy_static! {
-    static ref CACHE: DashMap<i32, WGS84<f32>> = DashMap::new();
-}
 
 /// Encode the content of a file into the Coords format, or decode back to original file content
 #[derive(Parser, Debug)]
@@ -37,6 +29,10 @@ struct Cli {
     /// If to encode, otherwise decode
     #[arg(short, long, default_value_t = true)]
     encode: bool,
+
+    /// If to print the encoded string to the CLI
+    #[arg( long, default_value_t = false)]
+    output_cli: bool
 }
 
 fn main() -> std::io::Result<()> {
@@ -45,11 +41,10 @@ fn main() -> std::io::Result<()> {
     let input_contents =
         fs::read_to_string(args.input_path).expect("Should have been able to read the file");
 
-    let start_time = Instant::now();
 
 
     // Load origin
-    let origin: WGS84<f32>;
+    let origin: WGS84<f64>;
     if args.coords_path.is_some(){
         origin= saveandload::load_origin_coordinates(&args.coords_path.unwrap()).unwrap();
     }
@@ -57,9 +52,9 @@ fn main() -> std::io::Result<()> {
         let re: Regex = Regex::new(r"[\[\]\(\)\{\}]+").unwrap();
         let coords_string_raw = args.coords.unwrap();
         let coords_string = Regex::replace_all(&re,&coords_string_raw, "");
-        let coords_vec: Vec<f32> = coords_string
+        let coords_vec: Vec<f64> = coords_string
         .split(',')
-        .map(|s| s.trim().parse::<f32>().expect("Invalid float in --coords"))
+        .map(|s| s.trim().parse::<f64>().expect("Invalid float in --coords"))
         .collect();
         origin = WGS84::from_degrees_and_meters(coords_vec[0], coords_vec[1], coords_vec[2])
     }
@@ -71,16 +66,18 @@ fn main() -> std::io::Result<()> {
     let text_hex = hex::encode(&input_contents);
     let encoded = coords::encode(origin, &text_hex);
 
+    if args.output_cli {
+        log_encoding(encoded.clone());
+    }
+
     saveandload::save_encoding(&encoded, &args.output_path);
 
     let loaded = saveandload::load_encoding(&args.output_path);
-    println!("\nRestoring to text");
     let decoded = coords::decode(origin, loaded);
 
     println!("Succeded: {:?}", input_contents == decoded);
-    let duration = start_time.elapsed();
 
-    println!("Time elapsed in expensive_function() is: {:?}", duration);
+    
 
     Ok(())
 }
