@@ -46,7 +46,7 @@ pub(crate) mod lib_tests {
         let origin = WGS84::from_degrees_and_meters(51.5074, -0.1278, 0.0);
         let test_value = 0x1234;
         let coord = generate_coordinate_for_distance(origin, test_value);
-        let computed_distance = origin.distance(&coord).floor() as i32;
+        let computed_distance = origin.distance(&coord).round() as i32;
 
         assert_eq!(test_value, computed_distance, "Computed distance does not match input");
     }

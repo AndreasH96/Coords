@@ -45,7 +45,7 @@ pub fn compute_coordinate(origin: WGS84<f64>, target_distance: i32) -> WGS84<f64
 
         for _ in 0..100 {
             let point = haversine_destination(&origin, bearing, guess_distance);
-            let actual = origin.distance(&point).floor() as i32;
+            let actual = origin.distance(&point).round() as i32;
             let error = target_distance - actual;
 
             if error == 0 {
@@ -96,7 +96,7 @@ pub fn decode(origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> String {
     let mut strings: Vec<String> = vec![];
 
     for (i, cord) in encoded.iter().enumerate() {
-        let val = origin.distance(cord).floor() as i32;
+        let val = origin.distance(cord).round() as i32;
         // Last chunk may have fewer hex digits
         if i == encoded.len() - 1 {
             // Determine actual hex width of last chunk by checking leading zeros
