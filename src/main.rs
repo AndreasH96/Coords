@@ -32,7 +32,11 @@ struct Cli {
 
     /// If to print the encoded string to the CLI
     #[arg( long, default_value_t = false)]
-    output_cli: bool
+    output_cli: bool,
+
+    /// Generate an HTML map plot of the encoded coordinates and open it in the browser
+    #[arg(long, default_value_t = false)]
+    plot: bool
 }
 
 fn main() -> std::io::Result<()> {
@@ -71,6 +75,10 @@ fn main() -> std::io::Result<()> {
     }
 
     saveandload::save_encoding(&encoded, &args.output_path);
+
+    if args.plot {
+        saveandload::generate_plot(&encoded, &args.output_path);
+    }
 
     let loaded = saveandload::load_encoding(&args.output_path);
     let decoded = coords::decode(origin, loaded);

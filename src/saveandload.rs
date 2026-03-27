@@ -64,3 +64,53 @@ pub fn load_origin_coordinates(filename: &std::path::PathBuf) -> Result<WGS84<f6
     let origin = WGS84::from_degrees_and_meters(values[0], values[1], values[2]);
     Ok(origin)
 }
+
+pub fn generate_plot(data: &[WGS84<f64>], output_path: &std::path::PathBuf) {
+    use plotters::prelude::*;
+    use plotters::style::RGBColor;
+
+    let png_path = output_path.with_extension("png");
+    let point_color = RGBColor(220, 50, 50);
+
+    // Load the world map image
+    let map_bytes = include_bytes!("../assets/world_map.jpg");
+    let map_img = image::load_from_memory(map_bytes).expect("Failed to load world map");
+    let map_rgb = map_img.to_rgb8();
+    let (map_w, map_h) = map_rgb.dimensions();
+
+    // Create output image buffer starting with the world map
+    let mut buf = vec![0u8; (map_w * map_h * 3) as usize];
+    buf.copy_from_slice(&map_rgb.into_raw());
+
+    {
+        let root = BitMapBackend::with_buffer(&mut buf, (map_w, map_h)).into_drawing_area();
+
+        let mut chart = ChartBuilder::on(&root)
+            .build_cartesian_2d(-180.0f64..180.0f64, -90.0f64..90.0f64)
+            .unwrap();
+
+        chart.configure_mesh().disable_mesh().draw().unwrap();
+
+        chart
+            .draw_series(data.iter().map(|c| {
+                Circle::new(
+                    (c.longitude_degrees(), c.latitude_degrees()),
+                    4,
+                    point_color.filled(),
+                )
+            }))
+            .unwrap();
+
+        root.present().unwrap();
+    }
+
+    let out_img = image::RgbImage::from_raw(map_w, map_h, buf).unwrap();
+    out_img.save(&png_path).expect("Failed to save plot");
+
+    println!("Plot saved to: {}", png_path.display());
+
+    std::process::Command::new("open")
+        .arg(&png_path)
+        .spawn()
+        .ok();
+}
