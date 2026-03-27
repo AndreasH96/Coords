@@ -109,8 +109,10 @@ pub fn generate_plot(data: &[WGS84<f64>], output_path: &std::path::PathBuf) {
 
     println!("Plot saved to: {}", png_path.display());
 
-    std::process::Command::new("open")
-        .arg(&png_path)
-        .spawn()
-        .ok();
+    #[cfg(target_os = "macos")]
+    { std::process::Command::new("open").arg(&png_path).spawn().ok(); }
+    #[cfg(target_os = "linux")]
+    { std::process::Command::new("xdg-open").arg(&png_path).spawn().ok(); }
+    #[cfg(target_os = "windows")]
+    { std::process::Command::new("cmd").args(["/c", "start", ""]).arg(&png_path).spawn().ok(); }
 }

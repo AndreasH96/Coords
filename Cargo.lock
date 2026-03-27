@@ -412,6 +412,7 @@ dependencies = [
  "clap",
  "csv",
  "dashmap",
+ "flate2",
  "hex",
  "image",
  "itertools",

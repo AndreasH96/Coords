@@ -124,15 +124,14 @@ pub fn encode(origin: WGS84<f64>, text: &str) -> Vec<WGS84<f64>> {
     result
 }
 
-/// Decode a chain of coordinates back to text.
-/// Last point is the origin (ignored for decoding).
-/// Data is in consecutive distances: dist(P0,P1), dist(P1,P2), ...
-pub fn decode(_origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> String {
+/// Core decode logic. When `trim_last` is true, the last chunk is trimmed to
+/// its minimal even hex width (for variable-length text). When false, all
+/// chunks use full CHUNK_HEX_WIDTH (for padded/compressed data).
+fn decode_coords(encoded: &[WGS84<f64>], trim_last: bool) -> Result<Vec<u8>, String> {
     if encoded.len() < 3 {
-        return String::from("Not enough points to decode");
+        return Err("Not enough points to decode".to_string());
     }
 
-    // Last point is the stored origin, data points are everything before it
     let data_points = &encoded[..encoded.len() - 1];
     let mut strings: Vec<String> = vec![];
 
@@ -140,7 +139,7 @@ pub fn decode(_origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> String {
         let val = data_points[i].distance(&data_points[i + 1]).round() as i32;
         let is_last = i == data_points.len() - 2;
 
-        if is_last {
+        if is_last && trim_last {
             let hex = format!("{:0width$x}", val, width = CHUNK_HEX_WIDTH);
             let trimmed = hex.trim_start_matches('0');
             let len = if trimmed.is_empty() {
@@ -158,13 +157,93 @@ pub fn decode(_origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> String {
 
     let hex_string: String = strings.join("");
 
-    match hex::decode(&hex_string) {
-        Ok(decoded_bytes) => match String::from_utf8(decoded_bytes.clone()) {
-            Ok(text) => text,
-            Err(_e) => String::from("Failed to parse, invalid UTF-8!"),
-        },
-        Err(_e) => String::from("Failed to decode hex string!"),
+    hex::decode(&hex_string).map_err(|e| format!("Failed to decode hex string: {}", e))
+}
+
+/// Decode a chain of coordinates back to raw bytes (with last-chunk trimming).
+/// Last point is the origin (ignored for decoding).
+/// Data is in consecutive distances: dist(P0,P1), dist(P1,P2), ...
+pub fn decode(_origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> Result<Vec<u8>, String> {
+    decode_coords(&encoded, true)
+}
+
+/// Encode raw bytes with metadata (filename, size) embedded in the coordinate chain.
+/// Data is compressed with gzip before encoding.
+pub fn encode_with_metadata(origin: WGS84<f64>, data: &[u8], filename: &str) -> Vec<WGS84<f64>> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let header = format!(r#"{{"name":"{}","size":{}}}"#, filename, data.len());
+    let header_bytes = header.as_bytes();
+    let header_len = (header_bytes.len() as u32).to_be_bytes();
+
+    let mut payload = Vec::with_capacity(4 + header_bytes.len() + data.len());
+    payload.extend_from_slice(&header_len);
+    payload.extend_from_slice(header_bytes);
+    payload.extend_from_slice(data);
+
+    // Compress the payload
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&payload).expect("Failed to compress data");
+    let mut compressed = encoder.finish().expect("Failed to finish compression");
+
+    // Pad to a multiple of 3 bytes (CHUNK_HEX_WIDTH/2) so all hex chunks are
+    // full-width and the last-chunk trimming in decode doesn't corrupt data.
+    // The gzip decompressor ignores trailing bytes after the stream.
+    let bytes_per_chunk = CHUNK_HEX_WIDTH / 2;
+    while compressed.len() % bytes_per_chunk != 0 {
+        compressed.push(0);
     }
+
+    let text_hex = hex::encode(&compressed);
+    encode(origin, &text_hex)
+}
+
+/// Decode a coordinate chain that contains metadata, returning (file_bytes, original_filename).
+/// Data is decompressed with gzip after decoding.
+pub fn decode_with_metadata(
+    _origin: WGS84<f64>,
+    encoded: Vec<WGS84<f64>>,
+) -> Result<(Vec<u8>, String), String> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let compressed = decode_coords(&encoded, false)?;
+
+    // Decompress
+    let mut decoder = GzDecoder::new(&compressed[..]);
+    let mut bytes = Vec::new();
+    decoder
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to decompress data: {}", e))?;
+
+    if bytes.len() < 4 {
+        return Err("Data too short to contain metadata header".to_string());
+    }
+
+    let header_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+
+    if bytes.len() < 4 + header_len {
+        return Err("Data too short for declared header length".to_string());
+    }
+
+    let header_str = String::from_utf8(bytes[4..4 + header_len].to_vec())
+        .map_err(|_| "Invalid UTF-8 in metadata header".to_string())?;
+
+    // Parse filename from header JSON
+    let name = header_str
+        .find(r#""name":""#)
+        .and_then(|start| {
+            let val_start = start + 8;
+            header_str[val_start..]
+                .find('"')
+                .map(|end| header_str[val_start..val_start + end].to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let file_bytes = bytes[4 + header_len..].to_vec();
+    Ok((file_bytes, name))
 }
 
 pub fn log_encoding(encoded: Vec<WGS84<f64>>) {

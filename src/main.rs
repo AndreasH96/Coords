@@ -26,26 +26,21 @@ struct Cli {
     #[arg(short, long, default_value = None)]
     coords: Option<String>,
 
-    /// If to encode, otherwise decode
-    #[arg(short, long, default_value_t = true)]
-    encode: bool,
+    /// Decode a .coords file back to the original file
+    #[arg(short, long, default_value_t = false)]
+    decode: bool,
 
     /// If to print the encoded string to the CLI
     #[arg( long, default_value_t = false)]
     output_cli: bool,
 
-    /// Generate an HTML map plot of the encoded coordinates and open it in the browser
+    /// Generate a PNG map plot of the encoded coordinates
     #[arg(long, default_value_t = false)]
     plot: bool
 }
 
 fn main() -> std::io::Result<()> {
     let args = Cli::parse();
-
-    let input_contents =
-        fs::read_to_string(args.input_path).expect("Should have been able to read the file");
-
-
 
     // Load origin
     let origin: WGS84<f64>;
@@ -65,27 +60,43 @@ fn main() -> std::io::Result<()> {
     else {
         panic!("No origin given!")
     }
-    
 
-    let text_hex = hex::encode(&input_contents);
-    let encoded = coords::encode(origin, &text_hex);
+    if args.decode {
+        // Decode mode: read .coords file, decode, write output
+        let loaded = saveandload::load_encoding(&args.input_path);
+        match coords::decode_with_metadata(origin, loaded) {
+            Ok((bytes, filename)) => {
+                fs::write(&args.output_path, &bytes)?;
+                println!("Decoded '{}' ({} bytes) to {}", filename, bytes.len(), args.output_path.display());
+            }
+            Err(e) => eprintln!("Decode failed: {}", e),
+        }
+    } else {
+        // Encode mode: read any file, encode with metadata, save
+        let input_contents = fs::read(&args.input_path).expect("Should have been able to read the file");
+        let filename = args.input_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
-    if args.output_cli {
-        log_encoding(encoded.clone());
+        let encoded = coords::encode_with_metadata(origin, &input_contents, &filename);
+
+        if args.output_cli {
+            log_encoding(encoded.clone());
+        }
+
+        saveandload::save_encoding(&encoded, &args.output_path);
+
+        if args.plot {
+            saveandload::generate_plot(&encoded, &args.output_path);
+        }
+
+        // Verification round-trip
+        let loaded = saveandload::load_encoding(&args.output_path);
+        match coords::decode_with_metadata(origin, loaded) {
+            Ok((bytes, _)) => println!("Succeeded: {:?}", input_contents == bytes),
+            Err(e) => println!("Verification failed: {}", e),
+        }
     }
-
-    saveandload::save_encoding(&encoded, &args.output_path);
-
-    if args.plot {
-        saveandload::generate_plot(&encoded, &args.output_path);
-    }
-
-    let loaded = saveandload::load_encoding(&args.output_path);
-    let decoded = coords::decode(origin, loaded);
-
-    println!("Succeded: {:?}", input_contents == decoded);
-
-    
 
     Ok(())
 }
