@@ -165,4 +165,16 @@ pub(crate) mod lib_tests {
         assert_eq!(data, decoded_bytes, "MP4 round-trip failed");
         assert_eq!("test_video.mp4", decoded_name);
     }
+
+    #[test]
+    fn test_wrong_origin_decode_fails() {
+        let origin = WGS84::from_degrees_and_meters(40.6976312, -74.1444842, 0.0);
+        let wrong_origin = WGS84::from_degrees_and_meters(52.5200, 13.4050, 0.0);
+        let data = b"Secret data that should not decode with wrong origin";
+
+        let encoded = encode_with_metadata(origin, data, "secret.txt");
+        let result = decode_with_metadata(wrong_origin, encoded);
+
+        assert!(result.is_err(), "Decoding with wrong origin should fail");
+    }
 }

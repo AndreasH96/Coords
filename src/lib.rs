@@ -7,6 +7,41 @@ use rand::Rng;
 const EARTH_RADIUS: f64 = 6_371_000.0;
 const CHUNK_HEX_WIDTH: usize = 6; // 6 hex chars = 3 bytes per chunk
 const COORD_SCALE: f64 = 1e8;
+const CHUNK_MOD: u32 = 0x1000000; // 2^24, the max value for a 6-hex-digit chunk
+
+/// Derive a deterministic 64-bit seed from an origin coordinate.
+fn derive_seed(origin: &WGS84<f64>) -> u64 {
+    let lat_bits = (origin.latitude_degrees() * COORD_SCALE).round() as i64;
+    let lon_bits = (origin.longitude_degrees() * COORD_SCALE).round() as i64;
+    let mut h = (lat_bits as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    h = h.wrapping_add(lon_bits as u64);
+    // splitmix64 mixing
+    h = h.wrapping_add(0x9E3779B97F4A7C15);
+    h = (h ^ (h >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    h = (h ^ (h >> 27)).wrapping_mul(0x94D049BB133111EB);
+    h ^ (h >> 31)
+}
+
+/// Splitmix64 PRNG step — returns next pseudo-random value.
+fn next_prng(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+/// Obfuscate a chunk value by adding a PRNG-derived offset (mod CHUNK_MOD).
+fn obfuscate_chunk(value: u32, prng_output: u64) -> u32 {
+    let offset = (prng_output % CHUNK_MOD as u64) as u32;
+    (value + offset) % CHUNK_MOD
+}
+
+/// Reverse obfuscation by subtracting the same offset (mod CHUNK_MOD).
+fn deobfuscate_chunk(obfuscated: u32, prng_output: u64) -> u32 {
+    let offset = (prng_output % CHUNK_MOD as u64) as u32;
+    (obfuscated + CHUNK_MOD - offset) % CHUNK_MOD
+}
 
 /// Simulate save/load quantization: round lat/lon to COORD_SCALE precision.
 fn quantize(coord: &WGS84<f64>) -> WGS84<f64> {
@@ -107,10 +142,13 @@ pub fn encode(origin: WGS84<f64>, text: &str) -> Vec<WGS84<f64>> {
     let mut current = random_coordinate();
     result.push(current);
 
+    let mut prng_state = derive_seed(&origin);
+
     for chunk in &chunks {
-        match i32::from_str_radix(chunk, 16) {
+        match u32::from_str_radix(chunk, 16) {
             Ok(value) => {
-                let next = compute_coordinate(&current, value);
+                let obfuscated = obfuscate_chunk(value, next_prng(&mut prng_state));
+                let next = compute_coordinate(&current, obfuscated as i32);
                 result.push(next);
                 current = next;
             }
@@ -127,16 +165,18 @@ pub fn encode(origin: WGS84<f64>, text: &str) -> Vec<WGS84<f64>> {
 /// Core decode logic. When `trim_last` is true, the last chunk is trimmed to
 /// its minimal even hex width (for variable-length text). When false, all
 /// chunks use full CHUNK_HEX_WIDTH (for padded/compressed data).
-fn decode_coords(encoded: &[WGS84<f64>], trim_last: bool) -> Result<Vec<u8>, String> {
+fn decode_coords(encoded: &[WGS84<f64>], origin: &WGS84<f64>, trim_last: bool) -> Result<Vec<u8>, String> {
     if encoded.len() < 3 {
         return Err("Not enough points to decode".to_string());
     }
 
     let data_points = &encoded[..encoded.len() - 1];
     let mut strings: Vec<String> = vec![];
+    let mut prng_state = derive_seed(origin);
 
     for i in 0..data_points.len() - 1 {
-        let val = data_points[i].distance(&data_points[i + 1]).round() as i32;
+        let raw_dist = data_points[i].distance(&data_points[i + 1]).round() as u32;
+        let val = deobfuscate_chunk(raw_dist, next_prng(&mut prng_state));
         let is_last = i == data_points.len() - 2;
 
         if is_last && trim_last {
@@ -163,8 +203,8 @@ fn decode_coords(encoded: &[WGS84<f64>], trim_last: bool) -> Result<Vec<u8>, Str
 /// Decode a chain of coordinates back to raw bytes (with last-chunk trimming).
 /// Last point is the origin (ignored for decoding).
 /// Data is in consecutive distances: dist(P0,P1), dist(P1,P2), ...
-pub fn decode(_origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> Result<Vec<u8>, String> {
-    decode_coords(&encoded, true)
+pub fn decode(origin: WGS84<f64>, encoded: Vec<WGS84<f64>>) -> Result<Vec<u8>, String> {
+    decode_coords(&encoded, &origin, true)
 }
 
 /// Encode raw bytes with metadata (filename, size) embedded in the coordinate chain.
@@ -203,13 +243,13 @@ pub fn encode_with_metadata(origin: WGS84<f64>, data: &[u8], filename: &str) -> 
 /// Decode a coordinate chain that contains metadata, returning (file_bytes, original_filename).
 /// Data is decompressed with gzip after decoding.
 pub fn decode_with_metadata(
-    _origin: WGS84<f64>,
+    origin: WGS84<f64>,
     encoded: Vec<WGS84<f64>>,
 ) -> Result<(Vec<u8>, String), String> {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
-    let compressed = decode_coords(&encoded, false)?;
+    let compressed = decode_coords(&encoded, &origin, false)?;
 
     // Decompress
     let mut decoder = GzDecoder::new(&compressed[..]);
